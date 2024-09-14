@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gocolly/colly"
+	"github.com/joho/godotenv"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
@@ -22,8 +23,13 @@ type Opportunity struct {
 }
 
 func main() {
+	envFile, _ := godotenv.Read(".env")
+
+	envGoogleApplicationCred := envFile["GOOGLE_APPLICATION_CREDENTIALS"]
+	docId := envFile["GSHEET_ID"]
+
 	links := make(map[string]string)
-	keyFilePath := flag.String("keyfile", "client_secret.json", "path to the credentials file")
+	keyFilePath := flag.String("keyfile", envGoogleApplicationCred, "path to the credentials file")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -46,7 +52,6 @@ func main() {
 		log.Fatalf("unable to retrieve sheets service: %v", err)
 	}
 
-	docId := "1_UZHyeItmm7Ebv5BbL9ibhQDBUtlTtB6blWvLcASb6c"
 	doc, err := srv.Spreadsheets.Get(docId).Do()
 	if err != nil {
 		log.Fatalf("unable to retrieve data from document: %v", err)
@@ -65,7 +70,9 @@ func main() {
 		links[fmt.Sprint(row[0])] = fmt.Sprint(row[1])
 	}
 
-	fmt.Println(links)
+	if link, ok := links["Underclassmen Internships"]; ok {
+		getUnderclassmenInternships(link)
+	}
 	// var opportunities []Opportunity
 
 	// underclassmenInternships, err := getUnderclassmenInternships(url)
