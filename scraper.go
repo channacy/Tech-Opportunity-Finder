@@ -11,6 +11,8 @@ import (
 
 	"github.com/gocolly/colly"
 	"github.com/joho/godotenv"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
@@ -70,9 +72,20 @@ func main() {
 		links[fmt.Sprint(row[0])] = fmt.Sprint(row[1])
 	}
 
+	fmt.Println(links)
+
 	if link, ok := links["Underclassmen Internships"]; ok {
-		getUnderclassmenInternships(link)
+		underClassmenInternships, err := getUnderclassmenInternships(link)
+		if err != nil {
+			fmt.Println("Issue getting underclassmen internships.")
+		} else {
+			setupMongoDB(underClassmenInternships)
+		}
 	}
+	// if link, ok := links["DEV"]; ok {
+	// 	getArticles(link)
+	// }
+
 	// var opportunities []Opportunity
 
 	// underclassmenInternships, err := getUnderclassmenInternships(url)
@@ -112,9 +125,9 @@ func getUnderclassmenInternships(url string) ([]Opportunity, error) {
 	collector.OnHTML("table tr", func(e *colly.HTMLElement) {
 		opportunity := Opportunity{}
 		if !strings.Contains(e.Text, "⛔") && !strings.Contains(e.Text, "Name") {
-			fmt.Println(e.Text)
-			fmt.Println(e.ChildAttr("a", "href"))
-			fmt.Println("--")
+			// fmt.Println(e.Text)
+			// fmt.Println(e.ChildAttr("a", "href"))
+			// fmt.Println("--")
 			opportunity.name = e.Text
 			opportunity.url = e.ChildAttr("a", "href")
 			opportunity.category = "Undergraduate Underclassmen Internships"
@@ -151,8 +164,8 @@ func getArticles(url string) ([]Opportunity, error) {
 		article := Opportunity{}
 		article.url = "https://dev.to/" + e.ChildAttr("a", "href")
 		article.name = e.ChildText(".crayons-story__hidden-navigation-link")
-		// fmt.Println(opportunity.name)
-		// fmt.Println(opportunity.url)
+		// fmt.Println(article.name)
+		// fmt.Println(article.url)
 		// fmt.Println("----")
 		articles = append(articles, article)
 	})
@@ -171,6 +184,58 @@ func getArticles(url string) ([]Opportunity, error) {
 
 	collector.Visit(url)
 	return articles, nil
+
+}
+
+func setupMongoDB(opportunities []Opportunity) {
+	// Set client options
+	clientOptions := options.Client().ApplyURI("mongodb://localhost:27017")
+
+	// Connect to MongoDB
+	client, err := mongo.Connect(context.Background(), clientOptions)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Check the connection
+	err = client.Ping(context.Background(), nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("Connected to MongoDB!")
+	// Access a MongoDB collection
+	collection := client.Database("techOptFinderDB").Collection("opportunities")
+
+	// Define a slice of interface{}
+	var docs []interface{}
+	// Convert each Opportunity struct to an interface{}
+	for _, op := range opportunities {
+		docs = append(docs, op)
+	}
+
+	// Insert a document
+	_, err = collection.InsertMany(context.Background(), docs)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("Inserted document into collection!")
+	// Find a document
+	var result Opportunity
+	err = collection.FindOne(context.Background(), nil).Decode(&result)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Found document: %+v\n", result)
+
+	// Disconnect from MongoDB
+	err = client.Disconnect(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("Connection to MongoDB closed.")
 
 }
 
