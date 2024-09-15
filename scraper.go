@@ -6,29 +6,39 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"strings"
 
 	"github.com/gocolly/colly"
 	"github.com/joho/godotenv"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
 )
 
 type Opportunity struct {
-	name     string
-	url      string
-	category string
+	ID                 primitive.ObjectID `bson:"_id,omitempty"`
+	Name               string             `bson:"name,omitempty"`
+	Url                string             `bson:"url,omitempty"`
+	Category           string             `bson:"category,omitempty"`
+	CreatedAt          time.Time          `bson:"createdAt,omitempty"`
+	ExpireAfterSeconds int                `bson:"expireAfterSeconds,omitempty"`
 }
 
 func main() {
+	var allOpportunities []Opportunity
 	envFile, _ := godotenv.Read(".env")
 
 	envGoogleApplicationCred := envFile["GOOGLE_APPLICATION_CREDENTIALS"]
 	docId := envFile["GSHEET_ID"]
+	mongoURI := envFile["MONGODB_URI"]
 
 	links := make(map[string]string)
 	keyFilePath := flag.String("keyfile", envGoogleApplicationCred, "path to the credentials file")
@@ -72,45 +82,26 @@ func main() {
 		links[fmt.Sprint(row[0])] = fmt.Sprint(row[1])
 	}
 
-	fmt.Println(links)
-
 	if link, ok := links["Underclassmen Internships"]; ok {
 		underClassmenInternships, err := getUnderclassmenInternships(link)
 		if err != nil {
 			fmt.Println("Issue getting underclassmen internships.")
 		} else {
-			setupMongoDB(underClassmenInternships)
+			allOpportunities = append(allOpportunities, underClassmenInternships...)
 		}
 	}
-	// if link, ok := links["DEV"]; ok {
-	// 	getArticles(link)
-	// }
 
-	// var opportunities []Opportunity
+	if link, ok := links["DEV"]; ok {
+		articles, err := getArticles(link)
+		if err != nil {
+			fmt.Println("Issue getting underclassmen internships.")
+		} else {
+			allOpportunities = append(allOpportunities, articles...)
+		}
+	}
 
-	// underclassmenInternships, err := getUnderclassmenInternships(url)
-	// if err != nil {
-	// 	fmt.Println("Issue getting underclassmen internships.")
-	// }
+	setupMongoDB(mongoURI, allOpportunities)
 
-	// articles, err := getArticles(url)
-	// if err != nil {
-	// 	fmt.Println("Issue getting underclassmen internships.")
-	// }
-
-	// opportunities = append(opportunities, underclassmenInternships...)
-	// opportunities = append(opportunities, articles...)
-
-	// hackathons, err := getHackathons(url)
-	// if err != nil {
-	// 	fmt.Println("Issue getting hackathons.")
-	// }
-	// opportunities = append(opportunities, hackathons...)
-
-	//store in database
-	//fmt.Println(underclassmenInternships)
-	// opportunities = append(opportunities, articles...)
-	// fmt.Println(opportunities)
 }
 
 func getUnderclassmenInternships(url string) ([]Opportunity, error) {
@@ -125,12 +116,10 @@ func getUnderclassmenInternships(url string) ([]Opportunity, error) {
 	collector.OnHTML("table tr", func(e *colly.HTMLElement) {
 		opportunity := Opportunity{}
 		if !strings.Contains(e.Text, "⛔") && !strings.Contains(e.Text, "Name") {
-			// fmt.Println(e.Text)
-			// fmt.Println(e.ChildAttr("a", "href"))
-			// fmt.Println("--")
-			opportunity.name = e.Text
-			opportunity.url = e.ChildAttr("a", "href")
-			opportunity.category = "Undergraduate Underclassmen Internships"
+			opportunity.Name = e.Text
+			opportunity.Url = e.ChildAttr("a", "href")
+			opportunity.Category = "Undergraduate Underclassmen Internships"
+			opportunity.ExpireAfterSeconds = 60
 		}
 		internships = append(internships, opportunity)
 	})
@@ -162,8 +151,10 @@ func getArticles(url string) ([]Opportunity, error) {
 
 	collector.OnHTML(".crayons-story", func(e *colly.HTMLElement) {
 		article := Opportunity{}
-		article.url = "https://dev.to/" + e.ChildAttr("a", "href")
-		article.name = e.ChildText(".crayons-story__hidden-navigation-link")
+		article.Url = "https://dev.to/" + e.ChildAttr("a", "href")
+		article.Name = e.ChildText(".crayons-story__hidden-navigation-link")
+		article.Category = "Articles"
+		article.ExpireAfterSeconds = 60
 		// fmt.Println(article.name)
 		// fmt.Println(article.url)
 		// fmt.Println("----")
@@ -187,86 +178,42 @@ func getArticles(url string) ([]Opportunity, error) {
 
 }
 
-func setupMongoDB(opportunities []Opportunity) {
-	// Set client options
-	clientOptions := options.Client().ApplyURI("mongodb://localhost:27017")
+func setupMongoDB(mongoURI string, opportunities []Opportunity) {
 
-	// Connect to MongoDB
-	client, err := mongo.Connect(context.Background(), clientOptions)
+	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
+	opts := options.Client().ApplyURI(mongoURI).SetServerAPIOptions(serverAPI)
+
+	client, err := mongo.Connect(context.TODO(), opts)
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 
-	// Check the connection
-	err = client.Ping(context.Background(), nil)
+	defer func() {
+		if err = client.Disconnect(context.TODO()); err != nil {
+			panic(err)
+		}
+	}()
+
+	if err := client.Database("techOptFinderDB").RunCommand(context.TODO(), bson.D{{"ping", 1}}).Err(); err != nil {
+		panic(err)
+	}
+
+	fmt.Println("Pinged your deployment. You successfully connected to MongoDB!")
+
+	coll := client.Database("techOptFinderDB").Collection("opportunities")
+
+	fmt.Println(opportunities)
+
+	var documents []interface{}
+	for _, opp := range opportunities {
+		documents = append(documents, opp)
+	}
+	fmt.Printf("Documents to be inserted: %+v\n", documents)
+
+	result, err := coll.InsertMany(context.TODO(), documents)
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
-
-	fmt.Println("Connected to MongoDB!")
-	// Access a MongoDB collection
-	collection := client.Database("techOptFinderDB").Collection("opportunities")
-
-	// Define a slice of interface{}
-	var docs []interface{}
-	// Convert each Opportunity struct to an interface{}
-	for _, op := range opportunities {
-		docs = append(docs, op)
-	}
-
-	// Insert a document
-	_, err = collection.InsertMany(context.Background(), docs)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println("Inserted document into collection!")
-	// Find a document
-	var result Opportunity
-	err = collection.FindOne(context.Background(), nil).Decode(&result)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Printf("Found document: %+v\n", result)
-
-	// Disconnect from MongoDB
-	err = client.Disconnect(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println("Connection to MongoDB closed.")
+	fmt.Println(result)
 
 }
-
-// func getHackathons(url string) ([]Opportunity, error) {
-// 	var hackathons []Opportunity
-// 	collector := colly.NewCollector()
-
-// 	collector.OnRequest(func(r *colly.Request) {
-// 		// print the url of that request
-// 		fmt.Println("Visiting", r.URL)
-// 	})
-
-// 	collector.OnHTML("div.hackathon-tile", func(e *colly.HTMLElement) {
-// 		// hackathonTitle := e.ChildText("h3.mb-4")
-// 		// fmt.Println("Hackathon Title:", hackathonTitle)
-// 		// title := e.ChildText("h2")
-// 		fmt.Println(e.ChildText("a"))
-// 	})
-
-// 	collector.OnResponse(func(r *colly.Response) {
-// 		fmt.Println("Got a response from", r.Request.URL)
-// 	})
-// 	collector.OnError(func(r *colly.Response, e error) {
-// 		fmt.Println("Error occurred!:", e)
-// 	})
-
-// 	collector.OnScraped(func(r *colly.Response) {
-// 		fmt.Println("Finished", r.Request.URL)
-// 	})
-
-// 	collector.Visit("https://devpost.com/hackathons")
-
-// 	return hackathons, nil
-// }
