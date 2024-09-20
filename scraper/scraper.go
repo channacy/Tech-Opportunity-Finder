@@ -1,4 +1,4 @@
-package main
+package scraper
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
+	"webscraper/shared"
 
 	"strings"
 
@@ -14,7 +14,6 @@ import (
 	"github.com/joho/godotenv"
 
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
@@ -23,17 +22,8 @@ import (
 	"google.golang.org/api/sheets/v4"
 )
 
-type Opportunity struct {
-	ID                 primitive.ObjectID `bson:"_id,omitempty"`
-	Name               string             `bson:"name,omitempty"`
-	Url                string             `bson:"url,omitempty"`
-	Category           string             `bson:"category,omitempty"`
-	CreatedAt          time.Time          `bson:"createdAt,omitempty"`
-	ExpireAfterSeconds int                `bson:"expireAfterSeconds,omitempty"`
-}
-
-func main() {
-	var allOpportunities []Opportunity
+func ScrapeData() {
+	var allOpportunities []shared.Opportunity
 	envFile, _ := godotenv.Read(".env")
 
 	envGoogleApplicationCred := envFile["GOOGLE_APPLICATION_CREDENTIALS"]
@@ -104,9 +94,9 @@ func main() {
 
 }
 
-func getUnderclassmenInternships(url string) ([]Opportunity, error) {
+func getUnderclassmenInternships(url string) ([]shared.Opportunity, error) {
 	collector := colly.NewCollector()
-	var internships []Opportunity
+	var internships []shared.Opportunity
 
 	collector.OnRequest(func(r *colly.Request) {
 		// print the url of that request
@@ -114,8 +104,8 @@ func getUnderclassmenInternships(url string) ([]Opportunity, error) {
 	})
 
 	collector.OnHTML("table tr", func(e *colly.HTMLElement) {
-		opportunity := Opportunity{}
-		if !strings.Contains(e.Text, "⛔") && !strings.Contains(e.Text, "Name") {
+		opportunity := shared.Opportunity{}
+		if !strings.Contains(e.Text, "⛔") && !strings.Contains(e.Text, "Name") && strings.Contains(e.Text, "✅") {
 			opportunity.Name = e.Text
 			opportunity.Url = e.ChildAttr("a", "href")
 			opportunity.Category = "Undergraduate Underclassmen Internships"
@@ -140,8 +130,8 @@ func getUnderclassmenInternships(url string) ([]Opportunity, error) {
 	return internships, nil
 }
 
-func getArticles(url string) ([]Opportunity, error) {
-	var articles []Opportunity
+func getArticles(url string) ([]shared.Opportunity, error) {
+	var articles []shared.Opportunity
 	collector := colly.NewCollector()
 
 	collector.OnRequest(func(r *colly.Request) {
@@ -150,7 +140,7 @@ func getArticles(url string) ([]Opportunity, error) {
 	})
 
 	collector.OnHTML(".crayons-story", func(e *colly.HTMLElement) {
-		article := Opportunity{}
+		article := shared.Opportunity{}
 		article.Url = "https://dev.to/" + e.ChildAttr("a", "href")
 		article.Name = e.ChildText(".crayons-story__hidden-navigation-link")
 		article.Category = "Articles"
@@ -178,7 +168,7 @@ func getArticles(url string) ([]Opportunity, error) {
 
 }
 
-func setupMongoDB(mongoURI string, opportunities []Opportunity) {
+func setupMongoDB(mongoURI string, opportunities []shared.Opportunity) {
 
 	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
 	opts := options.Client().ApplyURI(mongoURI).SetServerAPIOptions(serverAPI)
